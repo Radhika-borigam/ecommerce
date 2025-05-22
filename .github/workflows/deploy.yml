@@ -1,0 +1,76 @@
+name: Deploy E-commerce Application
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+  MYSQL_DATABASE: ecommerce
+  MYSQL_USER: ${{ secrets.MYSQL_USER }}
+  MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+  JWT_SECRET: ${{ secrets.JWT_SECRET }}
+  DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+  API_URL: ${{ secrets.API_URL }}
+  STRIPE_PUBLIC_KEY: ${{ secrets.STRIPE_PUBLIC_KEY }}
+  RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v2
+      with:
+        java-version: '17'
+        distribution: 'adopt'
+
+    - name: Build Spring Boot application
+      working-directory: ./source code/backend-spring boot
+      run: |
+        chmod +x mvnw
+        ./mvnw clean package -DskipTests
+
+    - name: Build React application
+      working-directory: ./source code/fontend-react
+      run: |
+        npm install
+        npm run build
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v1
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v1
+
+    - name: Build and push Docker images
+      run: |
+        docker-compose -f docker-compose.prod.yml build
+        docker-compose -f docker-compose.prod.yml push
+
+    - name: Deploy to server
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USERNAME }}
+        key: ${{ secrets.SERVER_SSH_KEY }}
+        script: |
+          cd /opt/ecommerce
+          echo "Pulling latest images..."
+          docker-compose -f docker-compose.prod.yml pull
+          
+          echo "Creating necessary directories..."
+          mkdir -p ssl
+          
+          echo "Deploying application..."
+          docker-compose -f docker-compose.prod.yml --env-file .env down
+          docker-compose -f docker-compose.prod.yml --env-file .env up -d
+          
+          echo "Cleaning up old images..."
+          docker image prune -f
